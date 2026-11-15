@@ -1,2 +1,28 @@
-# slickbro26.github.io
-msdash
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MicroSquirt Dash Setup</title>
+<style>:root{font:16px system-ui;color:#e7f1f7;background:#0a1019}body{max-width:620px;margin:auto;padding:20px}h1{font-size:1.5rem}fieldset{border:1px solid #34465a;border-radius:12px;margin:16px 0;padding:16px}label{display:block;margin:12px 0}input,select,button{box-sizing:border-box;width:100%;font:inherit;padding:10px;border-radius:8px;border:1px solid #4b6074;background:#182636;color:#f2f6fa}input[type=checkbox]{width:auto}button{background:#166a83;cursor:pointer;margin:8px 0}button:disabled{opacity:.45}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.muted{color:#a9b6c6;font-size:.9rem}#status{min-height:2em;color:#f5d45d}</style>
+<h1>MicroSquirt Dash</h1><p class="muted">Bluetooth configuration • Android Chrome • prototype</p><button id="connect">Connect to Dash</button><div id="status">Disconnected</div>
+<fieldset><legend>Gauge selection</legend><label>Position<select id="slot"></select></label><label>Channel<select id="channel"></select></label></fieldset>
+<fieldset><legend>Colors</legend><div id="colors"></div></fieldset>
+<fieldset><legend>Alarms</legend><label><input id="low" type="checkbox"> Low alarms enabled</label><label><input id="high" type="checkbox"> High alarms enabled</label><div id="alarms" class="grid"></div></fieldset>
+<fieldset><legend>Display range</legend><div id="range" class="grid"></div></fieldset>
+<button id="save" disabled>Save settings to dash</button><button id="reload" disabled>Reload from dash</button>
+<p class="muted">Changes are sent only when you press Save. Existing dashboard settings are read on connection. This prototype has no Bluetooth authentication: use it only in a trusted environment.</p>
+<script>
+'use strict';
+const service='a1000011-8e2a-309e-434e-675b813a2091', slotId='a1000012-8e2a-309e-434e-675b813a2091', dataId='a1000013-8e2a-309e-434e-675b813a2091';
+const names=['RPM','Boost','Coolant','Oil pressure','AFR','Intake air','Battery','MAP','Barometric','Engine load','TPS','TPS rate','Target AFR','AFR error','Ignition timing','Dwell','Injector PW 1','Injector PW 2','Injector duty','Fuel pressure','Oil temperature','Idle duty','Idle steps','Warmup enrich','Afterstart enrich','Accel enrich','EGO correction','Fuel correction','Boost target','Boost duty','Boost error','Sync loss count','Sync loss reason','Engine status','Sensor ADC 1','Sensor ADC 2','Sensor ADC 3','Sensor ADC 4','Spare output 1','Spare output 2','Knock retard','MAT correction','Air density corr'];
+const colors=['Cyan','Orange','Green','Red','White','Blue','Yellow','Gray'];
+const fields=['Minimum','Maximum','Warn low','Danger low','Warn high','Danger high'];
+const el=id=>document.getElementById(id), status=s=>el('status').textContent=s;
+let device, slotChar, dataChar, current=null;
+const addOptions=(id,arr)=>{el(id).innerHTML=arr.map((s,i)=>`<option value="${i}">${s}</option>`).join('')};
+addOptions('slot',['Top half-moon','Bottom half-moon','Bar 1','Bar 2','Bar 3','Bar 4']);addOptions('channel',names);
+['Normal','Warn low','Danger low','Warn high','Danger high'].forEach((s,i)=>{let l=document.createElement('label');l.textContent=s;let x=document.createElement('select');x.id='color'+i;colors.forEach((c,j)=>x.add(new Option(c,j)));l.append(x);el('colors').append(l)});
+fields.forEach((s,i)=>{let l=document.createElement('label');l.textContent=s;let x=document.createElement('input');x.type='number';x.step='any';x.id='num'+i;l.append(x);el(i<2?'range':'alarms').append(l)});
+function show(b){current=b;el('channel').value=b[2];for(let i=0;i<5;i++)el('color'+i).value=b[3+i];el('low').checked=!!(b[8]&1);el('high').checked=!!(b[8]&2);let v=new DataView(b.buffer,b.byteOffset,b.byteLength);for(let i=0;i<6;i++)el('num'+i).value=Number(v.getFloat32(10+i*4,true).toFixed(3));}
+async function load(){if(!slotChar)return;let slot=Number(el('slot').value);await slotChar.writeValueWithResponse(Uint8Array.of(slot));let value=await dataChar.readValue();if(value.byteLength!==34||value.getUint8(0)!==1)throw Error('Unexpected BLE protocol version');show(new Uint8Array(value.buffer,value.byteOffset,34).slice());status('Loaded position '+(slot+1));}
+el('connect').onclick=async()=>{try{if(!navigator.bluetooth)throw Error('Web Bluetooth requires Chrome on Android and an HTTPS page');device=await navigator.bluetooth.requestDevice({filters:[{name:'MicroSquirt Dash'}],optionalServices:[service]});device.addEventListener('gattserverdisconnected',()=>{el('save').disabled=el('reload').disabled=true;status('Disconnected')});const server=await device.gatt.connect();const svc=await server.getPrimaryService(service);slotChar=await svc.getCharacteristic(slotId);dataChar=await svc.getCharacteristic(dataId);el('save').disabled=el('reload').disabled=false;await load()}catch(e){status('Connection error: '+e.message)}};
+el('slot').onchange=async()=>{try{await load()}catch(e){status('Read error: '+e.message)}};
+el('reload').onclick=async()=>{try{await load()}catch(e){status('Read error: '+e.message)}};
+el('save').onclick=async()=>{try{if(!dataChar||!current)throw Error('Not connected');let b=current.slice();b[1]=Number(el('slot').value);b[2]=Number(el('channel').value);for(let i=0;i<5;i++)b[3+i]=Number(el('color'+i).value);b[8]=(el('low').checked?1:0)|(el('high').checked?2:0);let view=new DataView(b.buffer);let f=[];for(let i=0;i<6;i++){let v=Number(el('num'+i).value);if(!Number.isFinite(v))throw Error('Invalid numeric value');f.push(v);view.setFloat32(10+i*4,v,true)}if(f[0]>=f[1]||f[3]>f[2]||f[4]>f[5])throw Error('Range/threshold ordering invalid');await dataChar.writeValueWithResponse(b);await load();status('Saved to dashboard (NVS write follows shortly)')}catch(e){status('Save error: '+e.message)}};
+</script></html>
